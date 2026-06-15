@@ -47,6 +47,18 @@
     text-transform: uppercase; letter-spacing: .04em;
     margin-bottom: 10px;
   }
+  .section-header {
+    display: flex; align-items: center; margin-bottom: 10px;
+  }
+  .section-header .section-title { margin-bottom: 0; flex: 1; }
+  .bulk-links { display: flex; gap: 8px; }
+  .bulk-links a {
+    font-size: 11px; color: #16a34a;
+    cursor: pointer; text-decoration: none;
+  }
+  .bulk-links a:hover { text-decoration: underline; }
+  .bulk-links .sep { font-size: 11px; color: #ddd; }
+
   .row {
     display: flex; align-items: center;
     padding: 7px 0;
@@ -159,7 +171,14 @@
   </div>
 
   <div class="section">
-    <div class="section-title">パターン検知ルール</div>
+    <div class="section-header">
+      <div class="section-title">パターン検知ルール</div>
+      <div class="bulk-links">
+        <a id="allOn">すべてON</a>
+        <span class="sep">|</span>
+        <a id="allOff">すべてOFF</a>
+      </div>
+    </div>
     <div id="rules"></div>
   </div>
 
