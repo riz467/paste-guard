@@ -4,6 +4,8 @@
   "use strict";
 
   const master     = document.getElementById("master");
+  const siteToggle = document.getElementById("siteToggle");
+  const siteName   = document.getElementById("siteName");
   const kv         = document.getElementById("kv");
   const entropy    = document.getElementById("entropy");
   const thresh     = document.getElementById("thresh");
@@ -15,7 +17,28 @@
   const body       = document.body;
 
   let settings = Object.assign({}, window.PasteGuard.DEFAULTS);
+  let currentHostname = null;
 
+  // 現在のタブのホスト名を取得
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0] && tabs[0].url) {
+      try {
+        currentHostname = new URL(tabs[0].url).hostname;
+        siteName.textContent = currentHostname;
+        siteName.classList.remove("unknown");
+      } catch (_) {
+        siteName.textContent = "取得できません";
+        siteName.classList.add("unknown");
+      }
+    } else {
+      siteName.textContent = "対応外のページ";
+      siteName.classList.add("unknown");
+    }
+    // 設定読み込み後にサイトトグルを更新
+    updateSiteToggle();
+  });
+
+  // 設定を読み込んでUIに反映
   chrome.storage.sync.get(window.PasteGuard.DEFAULTS, (s) => {
     settings = s;
     render();
@@ -29,7 +52,14 @@
     threshVal.textContent = parseFloat(settings.entropyThreshold).toFixed(1);
     threshWrap.style.display = settings.entropyEnabled ? "block" : "none";
     body.classList.toggle("disabled", !settings.enabled);
+    updateSiteToggle();
     buildRules();
+  }
+
+  function updateSiteToggle() {
+    if (!currentHostname) return;
+    const disabled = settings.disabledSites || [];
+    siteToggle.checked = disabled.indexOf(currentHostname) === -1;
   }
 
   function buildRules() {
@@ -66,7 +96,19 @@
     chrome.storage.sync.set({ disabledRules: disabled });
   }
 
-  // すべてON: disabledRules を空にして全チェックボックスをONに
+  // サイト別ON/OFF
+  siteToggle.addEventListener("change", () => {
+    if (!currentHostname) return;
+    let disabled = (settings.disabledSites || []).slice();
+    if (siteToggle.checked) {
+      disabled = disabled.filter((x) => x !== currentHostname);
+    } else if (disabled.indexOf(currentHostname) === -1) {
+      disabled.push(currentHostname);
+    }
+    settings.disabledSites = disabled;
+    chrome.storage.sync.set({ disabledSites: disabled });
+  });
+
   allOn.addEventListener("click", () => {
     settings.disabledRules = [];
     chrome.storage.sync.set({ disabledRules: [] });
@@ -75,7 +117,6 @@
     });
   });
 
-  // すべてOFF: 全ルールIDを disabledRules に追加して全チェックボックスをOFFに
   allOff.addEventListener("click", () => {
     const allIds = window.PasteGuard.RULES.map((r) => r.id);
     settings.disabledRules = allIds;

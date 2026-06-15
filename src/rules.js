@@ -10,7 +10,6 @@
 (function () {
   "use strict";
 
-  // ---- 層1: パターン検知ルール ----
   const RULES = [
     {
       id: "aws_key",
@@ -74,32 +73,25 @@
     }
   ];
 
-  // ---- 層2: kv構造解析で使う「怖いキー名」 ----
   const SENSITIVE_KEY_WORDS = [
     "token", "secret", "key", "password", "passwd", "pwd",
     "auth", "credential", "cred", "session", "cookie",
     "bearer", "private", "apikey", "access", "refresh", "sign"
   ];
-  // キー名にこれらの語を含むか判定する正規表現
   const KEY_WORD_RE = new RegExp(SENSITIVE_KEY_WORDS.join("|"), "i");
-
-  // kv構造を拾う正規表現。3形式をまとめてキャプチャ:
-  //   "key": "value" / key=value / key: value
-  //   group1 = キー名, group2 = value (引用符内 or 非空白列)
   const KV_RE = /["']?([A-Za-z_][A-Za-z0-9_-]*)["']?\s*[:=]\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;{}]+)/g;
 
-  // ---- 設定デフォルト ----
   const DEFAULTS = {
     enabled: true,
     disabledRules: [],
-    kvEnabled: true,           // 層2 kv解析のON/OFF
-    entropyEnabled: true,      // 層3 エントロピーのON/OFF
+    disabledSites: [],       // サイト別ON/OFF
+    kvEnabled: true,
+    entropyEnabled: true,
     entropyThreshold: 4.8
   };
 
   const ENTROPY_MIN_LEN = 20;
 
-  // Shannon エントロピー (bit/char)
   function shannonEntropy(s) {
     const freq = {};
     for (let i = 0; i < s.length; i++) {
@@ -114,8 +106,6 @@
     }
     return h;
   }
-
-  // ---- 各層: マッチ範囲を { start, end, label, replacement } として収集 ----
 
   function collectPatterns(text, disabledRules) {
     const disabled = disabledRules || [];
@@ -145,9 +135,7 @@
     while ((m = re.exec(text)) !== null) {
       const keyName = m[1];
       if (!KEY_WORD_RE.test(keyName)) continue;
-
       const valueRaw = m[2];
-      // value が引用符付きかどうかで、引用符を保持してマスク
       let quoted = "";
       let inner = valueRaw;
       if ((valueRaw[0] === '"' || valueRaw[0] === "'") &&
@@ -156,11 +144,8 @@
         inner = valueRaw.slice(1, -1);
       }
       if (inner.length === 0) continue;
-
-      // value 部分の絶対位置を求める
       const valueStart = m.index + m[0].lastIndexOf(valueRaw);
       const valueEnd = valueStart + valueRaw.length;
-
       matches.push({
         start: valueStart,
         end: valueEnd,
@@ -191,13 +176,9 @@
     return matches;
   }
 
-  // ---- 重複排除: 範囲が重なるものは先勝ち ----
-  // matches は収集順 (層1→2→3) に並んでいる前提。
   function dedupe(matches) {
-    // start 昇順、同 start なら先に来たものを優先するため安定ソート用に index を保持
     const indexed = matches.map((m, i) => Object.assign({ _i: i }, m));
     indexed.sort((a, b) => (a.start - b.start) || (a._i - b._i));
-
     const kept = [];
     let lastEnd = -1;
     indexed.forEach((m) => {
@@ -205,15 +186,12 @@
         kept.push(m);
         lastEnd = m.end;
       }
-      // 重なる場合はスキップ (先に確定した方を優先)
     });
     return kept;
   }
 
-  // ---- 統合マスク処理 ----
   function maskText(text, settings) {
     settings = settings || DEFAULTS;
-
     let matches = collectPatterns(text, settings.disabledRules);
     if (settings.kvEnabled) {
       matches = matches.concat(collectKv(text));
@@ -222,22 +200,16 @@
       const th = settings.entropyThreshold || DEFAULTS.entropyThreshold;
       matches = matches.concat(collectEntropy(text, th));
     }
-
     const kept = dedupe(matches);
-
-    // 後ろから前へ置換 (index がズレないように)
     let masked = text;
     const ordered = kept.slice().sort((a, b) => b.start - a.start);
     ordered.forEach((m) => {
       masked = masked.slice(0, m.start) + m.replacement + masked.slice(m.end);
     });
-
-    // findings は前から順に並べ直して返す
     const findings = kept
       .slice()
       .sort((a, b) => a.start - b.start)
       .map((m) => ({ label: m.label }));
-
     return { masked: masked, findings: findings, total: findings.length };
   }
 

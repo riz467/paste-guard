@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "AIサービスへのペースト時にAPIキー・パスワード等を自動マスク",
 
-  "permissions": ["storage"],
+  "permissions": ["storage", "activeTab"],
 
   "host_permissions": [
     "*://claude.ai/*",
