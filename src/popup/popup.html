@@ -54,7 +54,6 @@
   .row .label { flex: 1; }
   .row .sub { font-size: 11px; color: #999; margin-top: 1px; }
 
-  .rule input[type="checkbox"],
   .row input[type="checkbox"] {
     width: 16px; height: 16px; cursor: pointer; accent-color: #16a34a;
   }
@@ -68,6 +67,32 @@
   .thresh-note {
     display: flex; justify-content: space-between;
     font-size: 10px; color: #aaa; margin-top: 3px;
+  }
+
+  .thresh-guide {
+    margin-top: 8px;
+    background: #f4f4f5;
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .thresh-guide-title {
+    font-size: 10px; font-weight: 600; color: #999;
+    text-transform: uppercase; letter-spacing: .03em;
+    margin-bottom: 6px;
+  }
+  .thresh-guide-row {
+    display: flex; align-items: baseline; gap: 6px;
+    font-size: 11px; margin-bottom: 3px;
+    color: #52525b;
+  }
+  .thresh-guide-row:last-child { margin-bottom: 0; }
+  .thresh-guide-row .range {
+    font-weight: 600; color: #18181b;
+    min-width: 38px; flex-shrink: 0;
+  }
+  .thresh-guide-row .example {
+    color: #999; font-size: 10px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
 
   body.disabled .section { opacity: .4; pointer-events: none; }
@@ -109,8 +134,26 @@
         <span class="val" id="threshVal">4.8</span>
       </div>
       <div class="thresh-note">
-        <span>ゆるい</span>
-        <span>厳しい</span>
+        <span>ゆるい（誤検知多）</span>
+        <span>厳しい（見逃し多）</span>
+      </div>
+      <div class="thresh-guide">
+        <div class="thresh-guide-title">感度の目安</div>
+        <div class="thresh-guide-row">
+          <span class="range">〜 4.0</span>
+          <span>英単語も拾う</span>
+          <span class="example">例: "password"</span>
+        </div>
+        <div class="thresh-guide-row">
+          <span class="range">4.5 〜 5.0</span>
+          <span>推奨・乱数を検知</span>
+          <span class="example">例: "sk-xKp9…"</span>
+        </div>
+        <div class="thresh-guide-row">
+          <span class="range">5.5 〜</span>
+          <span>完全乱数のみ</span>
+          <span class="example">例: 暗号鍵</span>
+        </div>
       </div>
     </div>
   </div>
