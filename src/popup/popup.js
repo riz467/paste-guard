@@ -4,12 +4,16 @@
   "use strict";
 
   const master = document.getElementById("master");
+  const kv = document.getElementById("kv");
+  const entropy = document.getElementById("entropy");
+  const thresh = document.getElementById("thresh");
+  const threshVal = document.getElementById("threshVal");
+  const threshWrap = document.getElementById("threshWrap");
   const rulesContainer = document.getElementById("rules");
   const body = document.body;
 
   let settings = Object.assign({}, window.PasteGuard.DEFAULTS);
 
-  // 設定を読み込んでUIに反映
   chrome.storage.sync.get(window.PasteGuard.DEFAULTS, (s) => {
     settings = s;
     render();
@@ -17,18 +21,21 @@
 
   function render() {
     master.checked = settings.enabled;
+    kv.checked = settings.kvEnabled;
+    entropy.checked = settings.entropyEnabled;
+    thresh.value = settings.entropyThreshold;
+    threshVal.textContent = parseFloat(settings.entropyThreshold).toFixed(1);
+    threshWrap.style.display = settings.entropyEnabled ? "block" : "none";
     body.classList.toggle("disabled", !settings.enabled);
     buildRules();
   }
 
-  // ルール一覧を生成
   function buildRules() {
     rulesContainer.innerHTML = "";
     const disabled = settings.disabledRules || [];
-
     window.PasteGuard.RULES.forEach((rule) => {
       const row = document.createElement("div");
-      row.className = "rule";
+      row.className = "row rule";
 
       const label = document.createElement("span");
       label.className = "label";
@@ -45,7 +52,6 @@
     });
   }
 
-  // 個別ルールの ON/OFF
   function toggleRule(id, enabled) {
     let disabled = (settings.disabledRules || []).slice();
     if (enabled) {
@@ -57,10 +63,27 @@
     chrome.storage.sync.set({ disabledRules: disabled });
   }
 
-  // マスター ON/OFF
   master.addEventListener("change", () => {
     settings.enabled = master.checked;
     body.classList.toggle("disabled", !settings.enabled);
     chrome.storage.sync.set({ enabled: settings.enabled });
+  });
+
+  kv.addEventListener("change", () => {
+    settings.kvEnabled = kv.checked;
+    chrome.storage.sync.set({ kvEnabled: settings.kvEnabled });
+  });
+
+  entropy.addEventListener("change", () => {
+    settings.entropyEnabled = entropy.checked;
+    threshWrap.style.display = entropy.checked ? "block" : "none";
+    chrome.storage.sync.set({ entropyEnabled: settings.entropyEnabled });
+  });
+
+  thresh.addEventListener("input", () => {
+    const v = parseFloat(thresh.value);
+    threshVal.textContent = v.toFixed(1);
+    settings.entropyThreshold = v;
+    chrome.storage.sync.set({ entropyThreshold: v });
   });
 })();
