@@ -1,9 +1,16 @@
 // rules.js — センシティブ情報の検知＆マスクロジック
 // content.js / popup.js の両方から使う共通モジュール。
+//
+// 処理は3層 + 重複排除:
+//   層1 パターン検知   … 特定フォーマット (AWS/JWT/GitHub 等)
+//   層2 kv構造解析     … 怖いキー名の value
+//   層3 エントロピー   … 未知の乱数トークン
+//   → 全層のマッチ範囲を集め、重なりは先勝ちで除去し、後ろから一括置換
 
 (function () {
   "use strict";
 
+  // ---- 層1: パターン検知ルール ----
   const RULES = [
     {
       id: "aws_key",
@@ -67,18 +74,32 @@
     }
   ];
 
-  // デフォルト設定
+  // ---- 層2: kv構造解析で使う「怖いキー名」 ----
+  const SENSITIVE_KEY_WORDS = [
+    "token", "secret", "key", "password", "passwd", "pwd",
+    "auth", "credential", "cred", "session", "cookie",
+    "bearer", "private", "apikey", "access", "refresh", "sign"
+  ];
+  // キー名にこれらの語を含むか判定する正規表現
+  const KEY_WORD_RE = new RegExp(SENSITIVE_KEY_WORDS.join("|"), "i");
+
+  // kv構造を拾う正規表現。3形式をまとめてキャプチャ:
+  //   "key": "value" / key=value / key: value
+  //   group1 = キー名, group2 = value (引用符内 or 非空白列)
+  const KV_RE = /["']?([A-Za-z_][A-Za-z0-9_-]*)["']?\s*[:=]\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;{}]+)/g;
+
+  // ---- 設定デフォルト ----
   const DEFAULTS = {
     enabled: true,
     disabledRules: [],
-    entropyEnabled: true,      // エントロピー検知のON/OFF
-    entropyThreshold: 4.8      // 閾値 (bit/char)
+    kvEnabled: true,           // 層2 kv解析のON/OFF
+    entropyEnabled: true,      // 層3 エントロピーのON/OFF
+    entropyThreshold: 4.8
   };
 
-  // エントロピー検知の対象とする最小文字数
   const ENTROPY_MIN_LEN = 20;
 
-  // Shannon エントロピーを計算する (bit/char)
+  // Shannon エントロピー (bit/char)
   function shannonEntropy(s) {
     const freq = {};
     for (let i = 0; i < s.length; i++) {
@@ -94,87 +115,132 @@
     return h;
   }
 
-  // パターンマッチによる検知＆マスク
-  function maskPatterns(text, disabledRules) {
+  // ---- 各層: マッチ範囲を { start, end, label, replacement } として収集 ----
+
+  function collectPatterns(text, disabledRules) {
     const disabled = disabledRules || [];
     const active = RULES.filter((r) => disabled.indexOf(r.id) === -1);
-    const findings = [];
-
+    const matches = [];
     active.forEach((rule) => {
       const re = new RegExp(rule.re.source, rule.re.flags);
       let m;
       while ((m = re.exec(text)) !== null) {
-        findings.push({ id: rule.id, label: rule.label, value: m[0] });
+        const full = m[0];
+        matches.push({
+          start: m.index,
+          end: m.index + full.length,
+          label: rule.label,
+          replacement: rule.mask(full)
+        });
         if (m.index === re.lastIndex) re.lastIndex++;
       }
     });
-
-    let masked = text;
-    active.forEach((rule) => {
-      const re = new RegExp(rule.re.source, rule.re.flags);
-      masked = masked.replace(re, rule.mask);
-    });
-
-    return { masked: masked, findings: findings };
+    return matches;
   }
 
-  // 高エントロピー文字列の検知＆マスク
-  function maskEntropy(text, threshold) {
-    const findings = [];
-    // トークン候補を抽出（英数記号が連続する20文字以上の塊）
+  function collectKv(text) {
+    const matches = [];
+    const re = new RegExp(KV_RE.source, KV_RE.flags);
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const keyName = m[1];
+      if (!KEY_WORD_RE.test(keyName)) continue;
+
+      const valueRaw = m[2];
+      // value が引用符付きかどうかで、引用符を保持してマスク
+      let quoted = "";
+      let inner = valueRaw;
+      if ((valueRaw[0] === '"' || valueRaw[0] === "'") &&
+          valueRaw[valueRaw.length - 1] === valueRaw[0]) {
+        quoted = valueRaw[0];
+        inner = valueRaw.slice(1, -1);
+      }
+      if (inner.length === 0) continue;
+
+      // value 部分の絶対位置を求める
+      const valueStart = m.index + m[0].lastIndexOf(valueRaw);
+      const valueEnd = valueStart + valueRaw.length;
+
+      matches.push({
+        start: valueStart,
+        end: valueEnd,
+        label: "機密キー値 (" + keyName + ")",
+        replacement: quoted + "[****]" + quoted
+      });
+    }
+    return matches;
+  }
+
+  function collectEntropy(text, threshold) {
+    const matches = [];
     const tokenRe = /[A-Za-z0-9+/=_-]{20,}/g;
-    const hits = [];
     let m;
     while ((m = tokenRe.exec(text)) !== null) {
       const tok = m[0];
       if (tok.length < ENTROPY_MIN_LEN) continue;
-      // 既にマスク済みのプレースホルダは除外
-      if (tok.indexOf("****") !== -1) continue;
       const e = shannonEntropy(tok);
       if (e >= threshold) {
-        hits.push({ value: tok, entropy: e });
+        matches.push({
+          start: m.index,
+          end: m.index + tok.length,
+          label: "高エントロピー (" + e.toFixed(1) + "bit)",
+          replacement: "[HIGH_ENTROPY:****]"
+        });
       }
     }
-
-    let masked = text;
-    const seen = {};
-    hits.forEach((h) => {
-      if (seen[h.value]) return;
-      seen[h.value] = true;
-      findings.push({
-        id: "entropy",
-        label: "高エントロピー (" + h.entropy.toFixed(1) + "bit)",
-        value: h.value
-      });
-      // 同一文字列を全て置換
-      masked = masked.split(h.value).join("[HIGH_ENTROPY:****]");
-    });
-
-    return { masked: masked, findings: findings };
+    return matches;
   }
 
-  // 統合マスク処理
-  //   settings: { disabledRules, entropyEnabled, entropyThreshold }
+  // ---- 重複排除: 範囲が重なるものは先勝ち ----
+  // matches は収集順 (層1→2→3) に並んでいる前提。
+  function dedupe(matches) {
+    // start 昇順、同 start なら先に来たものを優先するため安定ソート用に index を保持
+    const indexed = matches.map((m, i) => Object.assign({ _i: i }, m));
+    indexed.sort((a, b) => (a.start - b.start) || (a._i - b._i));
+
+    const kept = [];
+    let lastEnd = -1;
+    indexed.forEach((m) => {
+      if (m.start >= lastEnd) {
+        kept.push(m);
+        lastEnd = m.end;
+      }
+      // 重なる場合はスキップ (先に確定した方を優先)
+    });
+    return kept;
+  }
+
+  // ---- 統合マスク処理 ----
   function maskText(text, settings) {
     settings = settings || DEFAULTS;
 
-    // 1. パターン検知を先に適用
-    const p = maskPatterns(text, settings.disabledRules);
-    let masked = p.masked;
-    let findings = p.findings.slice();
-
-    // 2. エントロピー検知（パターンマスク後のテキストに対して）
-    if (settings.entropyEnabled) {
-      const threshold = settings.entropyThreshold || DEFAULTS.entropyThreshold;
-      const e = maskEntropy(masked, threshold);
-      masked = e.masked;
-      findings = findings.concat(e.findings);
+    let matches = collectPatterns(text, settings.disabledRules);
+    if (settings.kvEnabled) {
+      matches = matches.concat(collectKv(text));
     }
+    if (settings.entropyEnabled) {
+      const th = settings.entropyThreshold || DEFAULTS.entropyThreshold;
+      matches = matches.concat(collectEntropy(text, th));
+    }
+
+    const kept = dedupe(matches);
+
+    // 後ろから前へ置換 (index がズレないように)
+    let masked = text;
+    const ordered = kept.slice().sort((a, b) => b.start - a.start);
+    ordered.forEach((m) => {
+      masked = masked.slice(0, m.start) + m.replacement + masked.slice(m.end);
+    });
+
+    // findings は前から順に並べ直して返す
+    const findings = kept
+      .slice()
+      .sort((a, b) => a.start - b.start)
+      .map((m) => ({ label: m.label }));
 
     return { masked: masked, findings: findings, total: findings.length };
   }
 
-  // 公開API
   window.PasteGuard = {
     RULES: RULES,
     DEFAULTS: DEFAULTS,
