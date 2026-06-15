@@ -1,15 +1,9 @@
 // rules.js — センシティブ情報の検知＆マスクロジック
 // content.js / popup.js の両方から使う共通モジュール。
-// グローバルの window.PasteGuard に公開する。
 
 (function () {
   "use strict";
 
-  // 検知ルール定義。
-  //   id    : 内部識別子（設定の保存に使う）
-  //   label : ポップアップ表示名
-  //   re    : 検知用の正規表現（g フラグ必須）
-  //   mask  : マッチ文字列を受け取り、マスク後の文字列を返す関数
   const RULES = [
     {
       id: "aws_key",
@@ -76,38 +70,106 @@
   // デフォルト設定
   const DEFAULTS = {
     enabled: true,
-    disabledRules: []   // 無効化されたルール id の配列
+    disabledRules: [],
+    entropyEnabled: true,      // エントロピー検知のON/OFF
+    entropyThreshold: 4.8      // 閾値 (bit/char)
   };
 
-  // テキストにマスク処理を適用する。
-  //   text     : 入力文字列
-  //   settings : { disabledRules: [...] }
-  // 戻り値: { masked, findings, total }
-  //   findings : [{ id, label, value }] 検知した項目
-  function maskText(text, settings) {
-    settings = settings || DEFAULTS;
-    const disabled = settings.disabledRules || [];
-    const active = RULES.filter((r) => disabled.indexOf(r.id) === -1);
+  // エントロピー検知の対象とする最小文字数
+  const ENTROPY_MIN_LEN = 20;
 
+  // Shannon エントロピーを計算する (bit/char)
+  function shannonEntropy(s) {
+    const freq = {};
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      freq[c] = (freq[c] || 0) + 1;
+    }
+    let h = 0;
+    const len = s.length;
+    for (const k in freq) {
+      const p = freq[k] / len;
+      h -= p * Math.log2(p);
+    }
+    return h;
+  }
+
+  // パターンマッチによる検知＆マスク
+  function maskPatterns(text, disabledRules) {
+    const disabled = disabledRules || [];
+    const active = RULES.filter((r) => disabled.indexOf(r.id) === -1);
     const findings = [];
 
-    // 検知（マスク前に全件拾っておく）
     active.forEach((rule) => {
       const re = new RegExp(rule.re.source, rule.re.flags);
       let m;
       while ((m = re.exec(text)) !== null) {
         findings.push({ id: rule.id, label: rule.label, value: m[0] });
-        // ゼロ幅マッチによる無限ループ防止
         if (m.index === re.lastIndex) re.lastIndex++;
       }
     });
 
-    // マスク適用
     let masked = text;
     active.forEach((rule) => {
       const re = new RegExp(rule.re.source, rule.re.flags);
       masked = masked.replace(re, rule.mask);
     });
+
+    return { masked: masked, findings: findings };
+  }
+
+  // 高エントロピー文字列の検知＆マスク
+  function maskEntropy(text, threshold) {
+    const findings = [];
+    // トークン候補を抽出（英数記号が連続する20文字以上の塊）
+    const tokenRe = /[A-Za-z0-9+/=_-]{20,}/g;
+    const hits = [];
+    let m;
+    while ((m = tokenRe.exec(text)) !== null) {
+      const tok = m[0];
+      if (tok.length < ENTROPY_MIN_LEN) continue;
+      // 既にマスク済みのプレースホルダは除外
+      if (tok.indexOf("****") !== -1) continue;
+      const e = shannonEntropy(tok);
+      if (e >= threshold) {
+        hits.push({ value: tok, entropy: e });
+      }
+    }
+
+    let masked = text;
+    const seen = {};
+    hits.forEach((h) => {
+      if (seen[h.value]) return;
+      seen[h.value] = true;
+      findings.push({
+        id: "entropy",
+        label: "高エントロピー (" + h.entropy.toFixed(1) + "bit)",
+        value: h.value
+      });
+      // 同一文字列を全て置換
+      masked = masked.split(h.value).join("[HIGH_ENTROPY:****]");
+    });
+
+    return { masked: masked, findings: findings };
+  }
+
+  // 統合マスク処理
+  //   settings: { disabledRules, entropyEnabled, entropyThreshold }
+  function maskText(text, settings) {
+    settings = settings || DEFAULTS;
+
+    // 1. パターン検知を先に適用
+    const p = maskPatterns(text, settings.disabledRules);
+    let masked = p.masked;
+    let findings = p.findings.slice();
+
+    // 2. エントロピー検知（パターンマスク後のテキストに対して）
+    if (settings.entropyEnabled) {
+      const threshold = settings.entropyThreshold || DEFAULTS.entropyThreshold;
+      const e = maskEntropy(masked, threshold);
+      masked = e.masked;
+      findings = findings.concat(e.findings);
+    }
 
     return { masked: masked, findings: findings, total: findings.length };
   }
@@ -116,6 +178,7 @@
   window.PasteGuard = {
     RULES: RULES,
     DEFAULTS: DEFAULTS,
-    maskText: maskText
+    maskText: maskText,
+    shannonEntropy: shannonEntropy
   };
 })();
