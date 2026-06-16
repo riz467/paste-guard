@@ -1,20 +1,51 @@
 # Paste Guard
 
-AIサービスへのペースト時にセンシティブ情報（APIキー・パスワード・トークン等）を自動検知してマスクする Chrome 拡張機能。
+AI サービスへのペースト時に、APIキー・パスワード・トークン等のセンシティブ情報を自動検知してマスクする Chrome 拡張機能です。
+
+コンソール出力や JSON をそのまま AI チャットに貼り付けてしまい、機密情報が漏れる——そうした事故を、ペーストの瞬間にローカルで防ぎます。**データは一切外部送信されません。**
 
 ## 対応サイト
 
-- Claude.ai
-- ChatGPT (chatgpt.com)
-- Gemini (gemini.google.com)
-- Microsoft Copilot (copilot.microsoft.com)
+| サイト | エディタ |
+|---|---|
+| Claude.ai | ProseMirror |
+| ChatGPT (chatgpt.com) | ProseMirror |
+| Gemini (gemini.google.com) | Angular |
+| Copilot (copilot.microsoft.com) | 独自 |
+| Microsoft 365 Copilot (m365.cloud.microsoft) | Lexical |
+
+## 主な機能
+
+### 3層の検知エンジン
+
+1. **パターン検知** — AWS キー、JWT、GitHub トークン、OpenAI キー、DB 接続文字列、秘密鍵など、既知のフォーマットを正規表現で検出。
+2. **構造解析 (kv)** — キー名が機密を示唆する語（token, secret, password 等）を含む場合、その値をマスク。独自命名のトークンにも対応。
+3. **エントロピー検知** — 変数名のない乱数的な文字列を、シャノンエントロピーにより統計的に検出。閾値は調整可能。
+
+検知結果は優先度順（具体パターン > 構造解析 > エントロピー）で重複排除され、誤った二重マスクを防ぎます。
+
+### 設定
+
+- マスク機能全体の ON/OFF
+- サイトごとの有効/無効
+- 検知ルールの個別 ON/OFF（一括切り替えも可能）
+- エントロピー検知の閾値スライダー（感度の目安付き）
 
 ## インストール（開発版）
 
-1. chrome://extensions を開く
-2. デベロッパーモード ON
-3. 「パッケージ化されていない拡張機能を読み込む」→ src フォルダを選択
+1. このリポジトリをクローン、または ZIP でダウンロード
+2. chrome://extensions （Edge は edge://extensions）を開く
+3. デベロッパーモードを ON
+4. 「パッケージ化されていない拡張機能を読み込む」から src フォルダを選択
+
+## プライバシー
+
+本拡張機能はいかなるデータも外部送信しません。すべての処理はブラウザ内で完結します。詳細は PRIVACY.md をご覧ください。
+
+## 開発
+
+検知ロジックの単体テストは Node.js で実行できます。実行コマンドは "node test/mask.test.js" です。
 
 ## ライセンス
 
-MIT
+MIT License （LICENSE ファイルを参照）
