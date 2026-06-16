@@ -17,12 +17,17 @@
     }
   });
 
+  // 再ディスパッチしたイベントを識別するためのフラグ
+  let reinjecting = false;
+
   document.addEventListener(
     "paste",
     (e) => {
+      // 自分が再ディスパッチしたペーストは素通り（無限ループ防止）
+      if (reinjecting) return;
+
       if (!settings.enabled) return;
 
-      // サイト別ON/OFFチェック
       const hostname = window.location.hostname;
       if ((settings.disabledSites || []).indexOf(hostname) !== -1) return;
 
@@ -35,26 +40,56 @@
       if (!isInput && !isEditable) return;
       if (tag === "INPUT" && target.type === "password") return;
 
-      const text = e.clipboardData && e.clipboardData.getData("text/plain");
+      let text = e.clipboardData && e.clipboardData.getData("text/plain");
       if (!text) return;
+
+      // 改行コードを LF に正規化
+      text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
       const result = window.PasteGuard.maskText(text, settings);
       if (result.total === 0) return;
 
+      // 元のペーストを止めて、マスク済みテキストを再ペーストする
       e.preventDefault();
       e.stopPropagation();
 
-      insertText(target, isInput, result.masked);
+      insertMaskedText(target, isInput, result.masked);
       showToast(result.findings.length);
     },
     true
   );
 
-  function insertText(target, isInput, masked) {
+  // マスク済みテキストを挿入する。
+  // ClipboardEvent の再ディスパッチを第一手段とする。
+  // これはユーザーの通常ペーストと同じ経路なので、
+  // Lexical / ProseMirror / Angular など各種エディタで自然に動作する。
+  function insertMaskedText(target, isInput, masked) {
     target.focus();
-    const ok = document.execCommand("insertText", false, masked);
-    if (ok) return;
 
+    try {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", masked);
+      const ev = new ClipboardEvent("paste", {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true
+      });
+
+      reinjecting = true;
+      target.dispatchEvent(ev);
+      reinjecting = false;
+
+      // dispatchEvent が preventDefault されていれば挿入成功
+      if (ev.defaultPrevented) return;
+    } catch (err) {
+      reinjecting = false;
+      // 続けてフォールバックへ
+    }
+
+    // フォールバック1: execCommand
+    if (document.execCommand("insertText", false, masked)) return;
+
+    // フォールバック2: 直接操作
     if (isInput) {
       const start = target.selectionStart || 0;
       const end = target.selectionEnd || 0;
