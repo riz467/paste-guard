@@ -177,17 +177,25 @@
   }
 
   function dedupe(matches) {
+    // 各マッチに収集順 _i を付与 (パターン=小, kv=中, entropy=大)。
+    // _i が小さいほど優先度が高い (具体パターン > 統計推測)。
     const indexed = matches.map((m, i) => Object.assign({ _i: i }, m));
-    indexed.sort((a, b) => (a.start - b.start) || (a._i - b._i));
-    const kept = [];
-    let lastEnd = -1;
-    indexed.forEach((m) => {
-      if (m.start >= lastEnd) {
-        kept.push(m);
-        lastEnd = m.end;
-      }
-    });
-    return kept;
+
+    // 優先度順 (_i 昇順) に「場所取り」する。
+    // すでに確定した範囲と少しでも重なる後続は捨てる。
+    const accepted = [];
+    indexed
+      .slice()
+      .sort((a, b) => a._i - b._i)
+      .forEach((m) => {
+        const overlaps = accepted.some(
+          (k) => m.start < k.end && m.end > k.start
+        );
+        if (!overlaps) accepted.push(m);
+      });
+
+    // 置換しやすいよう start 昇順で返す。
+    return accepted.sort((a, b) => a.start - b.start);
   }
 
   function maskText(text, settings) {
@@ -213,10 +221,19 @@
     return { masked: masked, findings: findings, total: findings.length };
   }
 
-  window.PasteGuard = {
+  var api = {
     RULES: RULES,
     DEFAULTS: DEFAULTS,
     maskText: maskText,
     shannonEntropy: shannonEntropy
   };
+
+  // ブラウザ: window.PasteGuard に公開
+  if (typeof window !== "undefined") {
+    window.PasteGuard = api;
+  }
+  // Node.js (テスト用): module.exports に公開
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = api;
+  }
 })();
