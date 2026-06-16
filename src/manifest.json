@@ -10,7 +10,8 @@
     "*://claude.ai/*",
     "*://chatgpt.com/*",
     "*://gemini.google.com/*",
-    "*://copilot.microsoft.com/*"
+    "*://copilot.microsoft.com/*",
+    "*://m365.cloud.microsoft/*"
   ],
 
   "content_scripts": [
@@ -19,7 +20,8 @@
         "*://claude.ai/*",
         "*://chatgpt.com/*",
         "*://gemini.google.com/*",
-        "*://copilot.microsoft.com/*"
+        "*://copilot.microsoft.com/*",
+        "*://m365.cloud.microsoft/*"
       ],
       "js": ["rules.js", "content.js"],
       "run_at": "document_idle"
