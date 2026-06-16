@@ -17,15 +17,12 @@
     }
   });
 
-  // 再ディスパッチしたイベントを識別するためのフラグ
   let reinjecting = false;
 
   document.addEventListener(
     "paste",
     (e) => {
-      // 自分が再ディスパッチしたペーストは素通り（無限ループ防止）
       if (reinjecting) return;
-
       if (!settings.enabled) return;
 
       const hostname = window.location.hostname;
@@ -43,13 +40,11 @@
       let text = e.clipboardData && e.clipboardData.getData("text/plain");
       if (!text) return;
 
-      // 改行コードを LF に正規化
       text = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
       const result = window.PasteGuard.maskText(text, settings);
       if (result.total === 0) return;
 
-      // 元のペーストを止めて、マスク済みテキストを再ペーストする
       e.preventDefault();
       e.stopPropagation();
 
@@ -59,13 +54,66 @@
     true
   );
 
-  // マスク済みテキストを挿入する。
-  // ClipboardEvent の再ディスパッチを第一手段とする。
-  // これはユーザーの通常ペーストと同じ経路なので、
-  // Lexical / ProseMirror / Angular など各種エディタで自然に動作する。
+  // 要素が Lexical エディタ内にあるか判定する。
+  // Lexical (M365 Copilot 等) は execCommand を無視し独自処理するため、
+  // ClipboardEvent の再ディスパッチが必要。
+  function isLexical(target) {
+    let el = target;
+    while (el && el !== document.body) {
+      if (el.getAttribute && el.getAttribute("data-lexical-editor") === "true") {
+        return true;
+      }
+      el = el.parentElement;
+    }
+    // テキストノード側の属性も確認（Lexical は data-lexical-text を付与）
+    return !!(target.querySelector && target.querySelector("[data-lexical-text]"));
+  }
+
   function insertMaskedText(target, isInput, masked) {
     target.focus();
 
+    // Lexical エディタは ClipboardEvent 再ディスパッチ方式
+    if (!isInput && isLexical(target)) {
+      if (dispatchPaste(target, masked)) return;
+    }
+
+    // それ以外は execCommand 方式
+    // input/textarea は一括挿入で改行保持される
+    if (isInput) {
+      if (document.execCommand("insertText", false, masked)) return;
+      const start = target.selectionStart || 0;
+      const end = target.selectionEnd || 0;
+      target.value = target.value.slice(0, start) + masked + target.value.slice(end);
+      const pos = start + masked.length;
+      target.setSelectionRange(pos, pos);
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+
+    // contenteditable は一括 insertText（ProseMirror/Angular は改行保持される）
+    if (document.execCommand("insertText", false, masked)) return;
+
+    // execCommand が効かない場合は ClipboardEvent を試す
+    if (dispatchPaste(target, masked)) return;
+
+    // 最終フォールバック: Selection API で直接挿入
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const node = document.createTextNode(masked);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+
+  // ClipboardEvent を生成して再ディスパッチする。
+  // 成功（preventDefault された）なら true を返す。
+  function dispatchPaste(target, masked) {
     try {
       const dt = new DataTransfer();
       dt.setData("text/plain", masked);
@@ -74,42 +122,13 @@
         bubbles: true,
         cancelable: true
       });
-
       reinjecting = true;
       target.dispatchEvent(ev);
       reinjecting = false;
-
-      // dispatchEvent が preventDefault されていれば挿入成功
-      if (ev.defaultPrevented) return;
+      return ev.defaultPrevented;
     } catch (err) {
       reinjecting = false;
-      // 続けてフォールバックへ
-    }
-
-    // フォールバック1: execCommand
-    if (document.execCommand("insertText", false, masked)) return;
-
-    // フォールバック2: 直接操作
-    if (isInput) {
-      const start = target.selectionStart || 0;
-      const end = target.selectionEnd || 0;
-      target.value = target.value.slice(0, start) + masked + target.value.slice(end);
-      const pos = start + masked.length;
-      target.setSelectionRange(pos, pos);
-      target.dispatchEvent(new Event("input", { bubbles: true }));
-    } else {
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0) {
-        const range = sel.getRangeAt(0);
-        range.deleteContents();
-        const node = document.createTextNode(masked);
-        range.insertNode(node);
-        range.setStartAfter(node);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        target.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+      return false;
     }
   }
 
